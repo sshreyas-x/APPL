@@ -1,16 +1,7 @@
-"""
-NeuroLearn - Adaptive Personalized Learning Platform (Prototype)
----------------------------------------------------------------
-Single-file Streamlit app that demonstrates:
-- Onboarding flow (landing -> auth -> profile)
-- Dashboard (upload notes, web topic search)
-- Adaptive tutor (level-aware teaching + adaptive MCQ loop)
-- Advanced features
-"""
+"""APPL. (Prototype) — Adaptive Personalized Learning Platform (Streamlit)."""
 
 from __future__ import annotations
 
-# Standard library imports (allowed)
 import base64
 import dataclasses
 import difflib
@@ -25,76 +16,59 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-# Third-party imports (allowed by the prompt)
 import streamlit as st
 
 
-# -----------------------------
-# 1) UI CONFIG + GLOBAL STYLES
-# -----------------------------
-
 st.set_page_config(
-    page_title="NeuroLearn",
+    page_title="APPL.",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# A little CSS makes Streamlit feel more modern.
-# (This is safe: it only affects styles, not app logic.)
 st.markdown(
     """
 <style>
-  /* Main app background */
-  .stApp {
-    background: radial-gradient(1200px 800px at 20% 10%, #E9F2FF 0%, rgba(233, 242, 255, 0) 55%),
-                radial-gradient(1200px 800px at 80% 10%, #F3E8FF 0%, rgba(243, 232, 255, 0) 50%),
-                linear-gradient(180deg, #FFFFFF 0%, #FAFAFF 100%);
-  }
+  :root { color-scheme: dark; }
+  html, body, .stApp { background: #0A0A0A !important; color: #F2F2F2 !important; }
+  * { font-family: ui-serif, Georgia, "Times New Roman", Garamond, serif; }
+  a { color: #F2F2F2 !important; text-decoration: underline; }
+  section[data-testid="stSidebar"] { background: #0A0A0A !important; border-right: 1px solid rgba(255,255,255,0.10); }
+  [data-testid="stHeader"] { background: rgba(0,0,0,0.0) !important; }
+  .block-container { padding-top: 1.2rem; }
 
-  /* Make the sidebar slightly cleaner */
-  section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0B1220 0%, #111A2E 100%);
-  }
-  section[data-testid="stSidebar"] * {
-    color: #E9EEFF !important;
-  }
-
-  /* Card-like container helper */
-  .nl-card {
-    border: 1px solid rgba(15, 23, 42, 0.08);
+  .card {
+    border: 1px solid rgba(255,255,255,0.12);
     border-radius: 16px;
-    padding: 18px 18px;
-    background: rgba(255,255,255,0.75);
-    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
-    backdrop-filter: blur(8px);
+    padding: 18px;
+    background: rgba(255,255,255,0.03);
   }
-  .nl-title {
-    font-size: 44px;
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    margin-bottom: 0;
+  .title { font-size: 44px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+  .muted { opacity: 0.85; }
+
+  /* Make inputs and buttons monochrome */
+  button[kind="primary"], button[kind="secondary"] {
+    border-radius: 12px !important;
+    border: 1px solid rgba(255,255,255,0.25) !important;
   }
-  .nl-subtitle {
-    font-size: 16px;
-    opacity: 0.85;
-    margin-top: 6px;
+  button[kind="primary"] { background: #F2F2F2 !important; color: #0A0A0A !important; }
+  button[kind="secondary"] { background: rgba(255,255,255,0.05) !important; color: #F2F2F2 !important; }
+  [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea, [data-testid="stSelectbox"] div, [data-testid="stFileUploader"] section {
+    background: rgba(255,255,255,0.04) !important;
+    border-radius: 12px !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
   }
-  .nl-badge {
-    display: inline-block;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(59, 130, 246, 0.10);
-    border: 1px solid rgba(59, 130, 246, 0.22);
-    color: #0B3B9E;
-    font-weight: 600;
-    font-size: 12px;
+
+  /* Force Streamlit alerts (success/error/warning/info) to monochrome */
+  div[data-testid="stAlert"] {
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(255,255,255,0.18) !important;
+    color: #F2F2F2 !important;
   }
-  .nl-muted {
-    opacity: 0.8;
-  }
-  .nl-hr {
-    border-top: 1px solid rgba(15, 23, 42, 0.08);
-    margin: 12px 0 18px 0;
+  div[data-testid="stAlert"] svg { color: #F2F2F2 !important; }
+
+  /* Progress bar monochrome */
+  [data-testid="stProgress"] > div > div {
+    background: rgba(255,255,255,0.25) !important;
   }
 </style>
 """,
@@ -102,74 +76,33 @@ st.markdown(
 )
 
 
-# ------------------------------------
-# 2) SESSION STATE (APP "MEMORY")
-# ------------------------------------
-
 def _hash_password(password: str) -> str:
-    """Hash a password for mock authentication (never store plain text passwords)."""
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 def _init_state() -> None:
-    """
-    Initialize st.session_state keys.
-    Streamlit reruns the script on every interaction, so session_state is how we
-    "remember" things between button clicks.
-    """
     ss = st.session_state
-
-    # Basic navigation state (which "page" we are on)
-    ss.setdefault("page", "landing")  # landing -> auth -> profile -> dashboard -> tutor -> advanced
-
-    # Mock user database in memory (prototype only!)
-    # In a real app, you'd store users in a database.
-    ss.setdefault("user_db", {})  # username -> {"password_hash": "...", "created_at": ...}
+    ss.setdefault("page", "landing")  # landing/auth/profile/dashboard/tutor/advanced
+    ss.setdefault("user_db", {})
     ss.setdefault("is_authed", False)
     ss.setdefault("username", "")
-
-    # User profile (the "personalization" inputs)
     ss.setdefault("name", "")
     ss.setdefault("education_level", "")
     ss.setdefault("target_subject", "")
-
-    # Learning context (topic + retrieved material)
     ss.setdefault("topic", "")
-    ss.setdefault("web_material", "")  # e.g. Wikipedia summary
-
-    # Uploads (notes / images). We store lightweight metadata and (optionally) bytes.
-    ss.setdefault("uploads", [])  # list of dicts: {"name","type","size","sha","bytes_b64"(optional)}
-
-    # Adaptive tutor state
-    ss.setdefault("difficulty", 2)  # 1..5 (beginner -> deep dive)
-    ss.setdefault("last_lesson", "")  # latest generated explanation
+    ss.setdefault("web_material", "")
+    ss.setdefault("uploads", [])
+    ss.setdefault("difficulty", 2)
+    ss.setdefault("last_lesson", "")
     ss.setdefault("visual_prompt", "")
-    ss.setdefault("active_question", None)  # dict with question + options + answer_idx + explanation
-    ss.setdefault("answer_history", [])  # list of dicts: {"q","chosen","correct","difficulty","ts"}
-
-    # Notes that will be compiled into "Download AI Notes"
-    ss.setdefault("notes_log", [])  # list[str]
-
-    # Handwriting analysis mock
+    ss.setdefault("active_question", None)
+    ss.setdefault("answer_history", [])
+    ss.setdefault("notes_log", [])
     ss.setdefault("handwriting_last_score", None)
     ss.setdefault("handwriting_last_feedback", "")
 
 
 _init_state()
-
-
-# -----------------------------
-# 3) "LLM" LAYER (MOCKED)
-# -----------------------------
-#
-# The prompt asks to use google.generativeai (mocked for now).
-# We'll implement a clean wrapper:
-# - If google.generativeai is installed and a key exists, we *can* call it.
-# - Otherwise we run deterministic, grounded templates that avoid hallucinations.
-#
-# Note: No LLM can be guaranteed to "not hallucinate".
-# The safe approach is to ground the tutor on retrieved material (web_material)
-# and keep outputs constrained and deterministic when using mock mode.
 
 
 @dataclasses.dataclass
@@ -180,35 +113,21 @@ class LLMConfig:
 
 
 class TutorLLM:
-    """
-    Small wrapper around either:
-    - a deterministic mock generator (default), or
-    - google.generativeai (optional if you configure an API key).
-    """
-
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
-
         self._genai = None
         self._model = None
-
         if cfg.provider == "gemini":
             try:
                 import google.generativeai as genai  # type: ignore
-
-                # Configure using an environment variable (recommended).
-                # On Windows PowerShell you can set it like:
-                #   $env:GOOGLE_API_KEY="YOUR_KEY"
                 api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
                 if not api_key:
-                    # If no key is present, we fall back to mock.
                     self.cfg.provider = "mock"
                 else:
                     genai.configure(api_key=api_key)
                     self._genai = genai
                     self._model = genai.GenerativeModel(cfg.model_name)
             except Exception:
-                # If import/config fails, we also fall back to mock.
                 self.cfg.provider = "mock"
 
     @staticmethod
@@ -218,10 +137,6 @@ class TutorLLM:
 
     @staticmethod
     def _level_style(education_level: str, difficulty: int) -> Tuple[str, str]:
-        """
-        Returns a (tone, depth) pair based on the user's level and difficulty.
-        We keep this predictable so the app feels consistent.
-        """
         edu = (education_level or "").lower()
         if any(k in edu for k in ["school", "high school", "middle", "secondary"]):
             base_tone = "simple and friendly"
@@ -249,13 +164,7 @@ class TutorLLM:
         grounded_text: str,
         target_subject: str,
     ) -> str:
-        """
-        Deterministic "teaching" text.
-        It tries to use grounded_text (e.g. Wikipedia summary) to reduce hallucination.
-        """
         tone, depth = self._level_style(education_level, difficulty)
-
-        # Extract a small grounded snippet (safe, not fabricated).
         snippet = grounded_text.strip()
         if snippet:
             snippet = snippet[:450].strip()
@@ -266,8 +175,6 @@ class TutorLLM:
                 "Grounded notes: (No web material fetched yet. "
                 "Tip: search the topic on the Dashboard to ground the tutor.)"
             )
-
-        # A structured lesson is easier to read (and to compile into notes).
         lesson = f"""
         Topic: {topic}  |  Subject: {target_subject or "General"}  |  Level: {education_level or "Not set"}
 
@@ -315,13 +222,7 @@ class TutorLLM:
         difficulty: int,
         grounded_text: str,
     ) -> Dict[str, Any]:
-        """
-        Deterministic MCQ generator.
-        We keep it constrained to reduce "hallucination".
-        """
         rnd = random.Random(self._seed(topic, education_level, str(difficulty)))
-
-        # Question templates that get "harder" with difficulty.
         templates = {
             1: [
                 ("Which option best describes {topic}?", "definition"),
@@ -346,9 +247,6 @@ class TutorLLM:
         }
         q_text, kind = rnd.choice(templates.get(int(difficulty), templates[2]))
         q_text = q_text.format(topic=topic)
-
-        # Use grounded_text to create plausible distractors without inventing facts.
-        # We extract a few keywords from grounded text (if available).
         words = re.findall(r"[A-Za-z][A-Za-z\-]{2,}", grounded_text or "")
         keywords = [w for w in words if w.lower() not in {"the", "and", "that", "with", "from", "this"}]
         keywords = keywords[:20]
@@ -356,8 +254,6 @@ class TutorLLM:
         def kw(i: int, default: str) -> str:
             return keywords[i] if i < len(keywords) else default
 
-        # We purposely make one option "clearly best" using neutral language.
-        # This keeps evaluation reliable.
         correct = ""
         distractors: List[str] = []
         if kind in {"definition", "concept", "nuance"}:
@@ -436,13 +332,11 @@ class TutorLLM:
         grounded_text: str,
         target_subject: str,
     ) -> str:
-        """Generate a level-aware explanation."""
         topic = (topic or "").strip()
         if not topic:
             return "No topic selected yet."
 
         if self.cfg.provider == "gemini" and self._model is not None:
-            # We ask for a structured, grounded answer.
             prompt = f"""
 You are a careful tutor. If you are unsure about facts, say so.
 
@@ -470,13 +364,11 @@ Format:
                     topic, education_level, difficulty, grounded_text, target_subject
                 )
             except Exception:
-                # Fall back if the API call fails.
                 return self._mock_summarize(topic, education_level, difficulty, grounded_text, target_subject)
 
         return self._mock_summarize(topic, education_level, difficulty, grounded_text, target_subject)
 
     def visual_prompt(self, *, topic: str, education_level: str) -> str:
-        """Create a placeholder prompt for a diagram generator."""
         if not topic:
             return ""
         return self._mock_visual_prompt(topic, education_level)
@@ -489,7 +381,6 @@ Format:
         difficulty: int,
         grounded_text: str,
     ) -> Dict[str, Any]:
-        """Generate a MCQ-style question."""
         if not topic:
             return {
                 "question": "Pick a topic first.",
@@ -502,8 +393,6 @@ Format:
 
 
 def _llm_from_sidebar() -> TutorLLM:
-    """Create the LLM client once per rerun (configurable in sidebar)."""
-    # Sidebar switch: default mock for a reliable prototype experience.
     provider = st.session_state.get("llm_provider", "mock")
     provider = provider if provider in {"mock", "gemini"} else "mock"
     model_name = st.session_state.get("llm_model_name", "gemini-1.5-flash")
@@ -512,24 +401,11 @@ def _llm_from_sidebar() -> TutorLLM:
     return TutorLLM(cfg)
 
 
-# ------------------------------------
-# 4) WEB MATERIAL RETRIEVAL (STANDARD)
-# ------------------------------------
-#
-# We keep it simple: Wikipedia REST API summary endpoint.
-# This provides "grounded_text" so outputs can be more reliable.
-
-
 def fetch_wikipedia_summary(topic: str, timeout_s: int = 12) -> Tuple[str, str]:
-    """
-    Fetch a short summary from Wikipedia for grounding.
-    Returns (summary_text, source_url).
-    """
     topic = (topic or "").strip()
     if not topic:
         return "", ""
 
-    # Wikipedia REST API: /page/summary/{title}
     title = urllib.parse.quote(topic.replace(" ", "_"))
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 
@@ -552,13 +428,7 @@ def fetch_wikipedia_summary(topic: str, timeout_s: int = 12) -> Tuple[str, str]:
         return "", ""
 
 
-# ------------------------------------
-# 5) SMALL HELPERS FOR APP BEHAVIOR
-# ------------------------------------
-
-
 def goto(page: str) -> None:
-    """Navigate by updating session_state."""
     st.session_state.page = page
 
 
@@ -575,17 +445,15 @@ def normalize(s: str) -> str:
 
 
 def add_note(line: str) -> None:
-    """Append one line to the notes log."""
     line = (line or "").strip()
     if line:
         st.session_state.notes_log.append(line)
 
 
 def compile_notes_markdown() -> str:
-    """Create a nicely formatted notes document from session history."""
     ss = st.session_state
     lines: List[str] = []
-    lines.append("# NeuroLearn - AI Notes (Prototype)")
+    lines.append("# APPL. — AI Notes (Prototype)")
     lines.append("")
     lines.append("## Student Profile")
     lines.append(f"- Name: {ss.get('name','')}")
@@ -630,102 +498,47 @@ def compile_notes_markdown() -> str:
     return "\n".join(lines)
 
 
-# ------------------------------------
-# 6) SIDEBAR (NAV + DEBUG CONTROLS)
-# ------------------------------------
-
 with st.sidebar:
-    st.markdown("### NeuroLearn")
-    st.markdown('<div class="nl-badge">Adaptive Tutor • Prototype</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nl-hr"></div>', unsafe_allow_html=True)
-
-    # Show a tiny "wizard progress" indicator
+    st.markdown("### APPL.")
     page = st.session_state.page
-    progress_map = {
-        "landing": 0.05,
-        "auth": 0.20,
-        "profile": 0.35,
-        "dashboard": 0.55,
-        "tutor": 0.80,
-        "advanced": 0.95,
-    }
-    st.progress(progress_map.get(page, 0.1))
-
-    # Quick navigation buttons (only enable what makes sense)
-    st.markdown("### Navigation")
+    st.progress({"landing": 0.08, "auth": 0.22, "profile": 0.38, "dashboard": 0.60, "tutor": 0.82, "advanced": 0.95}.get(page, 0.1))
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Landing", use_container_width=True):
+        if st.button("Home", use_container_width=True):
             goto("landing")
-        if st.button("Dashboard", use_container_width=True, disabled=not st.session_state.get("is_authed", False)):
+        if st.button("Dashboard", use_container_width=True, disabled=not st.session_state.is_authed):
             goto("dashboard")
     with c2:
-        if st.button("Tutor", use_container_width=True, disabled=not st.session_state.get("is_authed", False)):
+        if st.button("Tutor", use_container_width=True, disabled=not st.session_state.is_authed):
             goto("tutor")
-        if st.button("Advanced", use_container_width=True, disabled=not st.session_state.get("is_authed", False)):
+        if st.button("Advanced", use_container_width=True, disabled=not st.session_state.is_authed):
             goto("advanced")
 
-    st.markdown('<div class="nl-hr"></div>', unsafe_allow_html=True)
+    st.session_state.llm_provider = st.selectbox("AI provider", ["mock", "gemini"], help="Gemini uses GOOGLE_API_KEY; mock is deterministic.")
+    st.session_state.llm_model_name = st.text_input("Model", value=st.session_state.get("llm_model_name", "gemini-1.5-flash"))
 
-    # LLM config (mock by default)
-    st.markdown("### AI Engine")
-    st.session_state.llm_provider = st.selectbox(
-        "Provider",
-        options=["mock", "gemini"],
-        help="Mock is deterministic and safe for a prototype. Gemini requires GOOGLE_API_KEY.",
-    )
-    st.session_state.llm_model_name = st.text_input("Model name", value=st.session_state.get("llm_model_name", "gemini-1.5-flash"))
-    st.caption("For Gemini, set env var `GOOGLE_API_KEY` then restart the app.")
-
-    st.markdown('<div class="nl-hr"></div>', unsafe_allow_html=True)
-
-    st.markdown("### Session")
-    if st.button("Reset everything", type="secondary", use_container_width=True):
-        # Clear and re-init state
-        for k in list(st.session_state.keys()):
-            del st.session_state[k]
+    if st.button("Reset session", type="secondary", use_container_width=True):
+        st.session_state.clear()
         _init_state()
         st.rerun()
-
-    # Mini debug (helpful during prototyping)
-    with st.expander("Debug (prototype)"):
-        st.write(
-            {
-                "is_authed": st.session_state.get("is_authed"),
-                "username": st.session_state.get("username"),
-                "education_level": st.session_state.get("education_level"),
-                "topic": st.session_state.get("topic"),
-                "difficulty": st.session_state.get("difficulty"),
-            }
-        )
-
-
-# ------------------------------------
-# 7) PAGE: LANDING
-# ------------------------------------
 
 
 def page_landing() -> None:
     st.markdown(
         """
-<div class="nl-card">
-  <div class="nl-title">NeuroLearn</div>
-  <div class="nl-subtitle nl-muted">
-    An adaptive personalized learning prototype: upload notes, search a topic, learn, and test yourself.
-  </div>
-  <div class="nl-hr"></div>
-  <div class="nl-muted">
-    This prototype focuses on flow, state management, and safe grounded tutoring behavior.
-  </div>
+<div class="card">
+  <p class="title">APPL.</p>
+  <p class="muted">An adaptive personalized learning prototype — grounded search, tutoring, and testing.</p>
+  <p class="muted">Sign in, pick your level, choose a topic, then learn + practice in an adaptive loop.</p>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
     st.write("")
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        if st.button("Get Started", type="primary", use_container_width=True):
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c2:
+        if st.button("Get started", type="primary", use_container_width=True):
             goto("auth")
 
 
@@ -735,13 +548,13 @@ def page_landing() -> None:
 
 
 def page_auth() -> None:
-    st.markdown("### Sign In / Sign Up")
-    st.caption("Prototype authentication: users are stored only in memory for this session.")
+    st.markdown("### Sign in / Sign up")
+    st.caption("Prototype auth: stored in memory for this session only.")
 
     tab_in, tab_up = st.tabs(["Sign In", "Sign Up"])
 
     with tab_up:
-        st.markdown("#### Create an account")
+        st.markdown("#### Create account")
         new_user = st.text_input("Username", key="signup_user")
         new_pass = st.text_input("Password", type="password", key="signup_pass")
         if st.button("Create account", use_container_width=True, key="signup_btn"):
@@ -772,7 +585,6 @@ def page_auth() -> None:
                 st.session_state.is_authed = True
                 st.session_state.username = user
                 st.success("Signed in successfully.")
-                # Go next: profile setup
                 goto("profile")
                 st.rerun()
 
@@ -784,23 +596,21 @@ def page_auth() -> None:
 
 def page_profile() -> None:
     st.markdown("### Profile Setup")
-    st.caption("These fields personalize explanations and the adaptive difficulty.")
+    st.caption("These fields personalize explanations and adaptive difficulty.")
 
     left, right = st.columns([1.2, 1])
     with left:
         name = st.text_input("Your name", value=st.session_state.get("name", ""))
-        edu = st.selectbox(
-            "Education level",
-            options=[
-                "",
-                "School (Middle School)",
-                "School (High School)",
-                "College (Undergraduate / B.Tech)",
-                "Masters (M.Tech / MS)",
-                "PhD / Research",
-            ],
-            index=0 if not st.session_state.get("education_level") else 1,
-        )
+        edu_options = [
+            "",
+            "School (Middle School)",
+            "School (High School)",
+            "College (Undergraduate / B.Tech)",
+            "Masters (M.Tech / MS)",
+            "PhD / Research",
+        ]
+        cur_edu = st.session_state.get("education_level", "")
+        edu = st.selectbox("Education level", options=edu_options, index=(edu_options.index(cur_edu) if cur_edu in edu_options else 0))
         subject = st.text_input(
             "Target subject (e.g., Physics, Biology, Data Structures, Thermodynamics)",
             value=st.session_state.get("target_subject", ""),
@@ -821,14 +631,11 @@ def page_profile() -> None:
     with right:
         st.markdown(
             """
-<div class="nl-card">
-  <div class="nl-badge">How personalization works</div>
-  <div style="height: 10px"></div>
-  <div class="nl-muted">
-    - Education level controls the explanation style (simple vs technical).<br/>
-    - Difficulty adapts based on your answers (correct -> harder, wrong -> simpler).<br/>
-    - Web search grounds the tutor to reduce made-up facts.<br/>
-  </div>
+<div class="card">
+  <p class="muted"><b>Personalization</b></p>
+  <p class="muted">- Education level changes explanation depth.</p>
+  <p class="muted">- Correct answers increase difficulty; wrong answers decrease it.</p>
+  <p class="muted">- Web summary grounds the tutor to reduce made-up details.</p>
 </div>
 """,
             unsafe_allow_html=True,
@@ -841,12 +648,8 @@ def page_profile() -> None:
 
 
 def _store_upload(file) -> None:
-    """Store an upload safely (prototype)."""
     raw = file.getvalue()
     sha = hashlib.sha256(raw).hexdigest()
-
-    # To keep memory manageable, we store image bytes in base64 (preview),
-    # and we store pdf bytes too (but we don't parse them without extra libs).
     b64 = base64.b64encode(raw).decode("ascii")
     st.session_state.uploads.append(
         {
@@ -863,17 +666,10 @@ def page_dashboard() -> None:
     st.markdown("### Dashboard")
     st.caption("Upload notes or search a topic online to ground the tutor.")
 
-    # Quick welcome summary
     st.markdown(
         f"""
-<div class="nl-card">
-  <div class="nl-badge">Welcome</div>
-  <div style="height: 10px"></div>
-  <div class="nl-muted">
-    Hello <b>{st.session_state.get("name") or "student"}</b> —
-    Level: <b>{st.session_state.get("education_level") or "Not set"}</b> •
-    Subject: <b>{st.session_state.get("target_subject") or "General"}</b>
-  </div>
+<div class="card">
+  <p class="muted">Hello <b>{st.session_state.get("name") or "student"}</b> • Level: <b>{st.session_state.get("education_level") or "Not set"}</b> • Subject: <b>{st.session_state.get("target_subject") or "General"}</b></p>
 </div>
 """,
         unsafe_allow_html=True,
@@ -888,11 +684,10 @@ def page_dashboard() -> None:
             "Upload files",
             type=["pdf", "png", "jpg", "jpeg", "webp"],
             accept_multiple_files=True,
-            help="PDF parsing / OCR is mocked in this prototype.",
+            help="PDF parsing / OCR is mocked (standard library only).",
         )
         if uploads:
             for f in uploads:
-                # Avoid duplicates by content hash
                 raw = f.getvalue()
                 sha = hashlib.sha256(raw).hexdigest()
                 if any(u.get("sha") == sha for u in st.session_state.uploads):
@@ -909,8 +704,7 @@ def page_dashboard() -> None:
                         st.image(img_bytes, caption=u["name"], use_container_width=True)
                     else:
                         st.info(
-                            "PDF parsing is not enabled in this prototype (standard library only). "
-                            "We still store the PDF so a future version can parse it with a PDF library."
+                            "PDF parsing isn't enabled here (standard library only). The file is stored for future parsing."
                         )
                     if st.button("Remove this upload", key=f"rm_upload_{idx}"):
                         st.session_state.uploads.pop(idx)
@@ -967,7 +761,6 @@ def page_tutor() -> None:
                 st.rerun()
             return
 
-        # Allow the student to adjust difficulty manually too (optional)
         ss.difficulty = st.slider("Current difficulty", min_value=1, max_value=5, value=int(ss.difficulty))
 
         if st.button("Teach me this topic", type="primary", use_container_width=True):
@@ -981,7 +774,6 @@ def page_tutor() -> None:
             ss.last_lesson = lesson
             add_note(f"Lesson generated for '{ss.topic}' at difficulty {ss.difficulty}.")
 
-            # Also create a "visual learning" prompt placeholder.
             ss.visual_prompt = llm.visual_prompt(topic=ss.topic, education_level=ss.education_level)
             add_note("Created a diagram prompt for visual learning.")
 
@@ -1018,7 +810,6 @@ def page_tutor() -> None:
                 chosen_idx = q["options"].index(choice)
                 correct = chosen_idx == int(q["answer_idx"])
 
-                # Record history
                 ss.answer_history.append(
                     {
                         "q": q["question"],
@@ -1040,11 +831,9 @@ def page_tutor() -> None:
                     ss.difficulty = clamp_int(int(ss.difficulty) - 1, 1, 5)
                     add_note(f"Difficulty decreased to {ss.difficulty}.")
 
-                # Show short explanation for learning
                 st.markdown("**Explanation**")
                 st.write(q.get("explanation", ""))
 
-                # If wrong: generate a simpler follow-up question (as requested)
                 if not correct:
                     ss.active_question = llm.question(
                         topic=ss.topic,
@@ -1053,7 +842,6 @@ def page_tutor() -> None:
                         grounded_text=ss.web_material,
                     )
                 else:
-                    # If correct: ask a harder question next (optional)
                     ss.active_question = llm.question(
                         topic=ss.topic,
                         education_level=ss.education_level,
@@ -1088,8 +876,6 @@ def page_advanced() -> None:
 
     with left:
         st.markdown("#### Note generator")
-        st.write("Compile everything you learned into a single downloadable notes file.")
-
         notes_md = compile_notes_markdown()
         st.download_button(
             label="Download AI Notes (Markdown)",
@@ -1105,8 +891,7 @@ def page_advanced() -> None:
     with right:
         st.markdown("#### Handwriting analysis (mock grading)")
         st.write(
-            "Upload an image of your written answer. Because OCR is not included (standard libs only), "
-            "you can optionally type your answer to be graded."
+            "Upload an image of your written answer. OCR isn't included here, so use the typed answer for grading."
         )
 
         img = st.file_uploader("Upload handwriting image", type=["png", "jpg", "jpeg", "webp"], key="hw_img")
@@ -1119,7 +904,6 @@ def page_advanced() -> None:
         if img is not None:
             st.image(img.getvalue(), caption=img.name, use_container_width=True)
 
-        # We grade against the currently active question's correct option if it exists.
         q = st.session_state.get("active_question")
         expected = ""
         if q and isinstance(q, dict) and q.get("options"):
@@ -1129,7 +913,6 @@ def page_advanced() -> None:
             if not expected:
                 st.warning("No active question found. Go to Tutor and generate a question first.")
             else:
-                # Similarity score (0..1) using standard library difflib
                 a = normalize(typed)
                 b = normalize(expected)
                 if not a:
@@ -1140,7 +923,6 @@ def page_advanced() -> None:
                 score_pct = int(round(score * 100))
                 st.session_state.handwriting_last_score = score_pct
 
-                # Friendly feedback based on score
                 if score_pct >= 85:
                     fb = "Great! Your answer closely matches the expected concept."
                 elif score_pct >= 60:
@@ -1162,20 +944,12 @@ def page_advanced() -> None:
             st.rerun()
 
 
-# ------------------------------------
-# 13) ROUTER (CHOOSE WHICH PAGE TO SHOW)
-# ------------------------------------
-
-
 def enforce_access() -> None:
-    """Prevent users from skipping auth/profile steps."""
     ss = st.session_state
 
-    # If not signed in, only landing/auth pages are allowed.
     if not ss.is_authed and ss.page not in {"landing", "auth"}:
         ss.page = "auth"
 
-    # If signed in but profile incomplete, force profile page (except landing/auth).
     profile_ok = bool(ss.get("name")) and bool(ss.get("education_level"))
     if ss.is_authed and not profile_ok and ss.page not in {"landing", "auth", "profile"}:
         ss.page = "profile"
@@ -1184,15 +958,13 @@ def enforce_access() -> None:
 def main() -> None:
     enforce_access()
 
-    # Header strip (small and clean)
     col_a, col_b = st.columns([1.2, 0.8])
     with col_a:
-        st.markdown("### NeuroLearn")
+        st.markdown("### APPL.")
     with col_b:
         if st.session_state.get("is_authed"):
             st.caption(f"Signed in as **{st.session_state.get('username','')}**")
 
-    # Render current page
     page = st.session_state.page
     if page == "landing":
         page_landing()
@@ -1212,6 +984,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Streamlit runs the file via `streamlit run app.py`,
-    # but keeping a main guard is good Python practice.
     main()
